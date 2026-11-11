@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The cube that wouldn't spin: why WebGPU works (or doesn't) on your Ubuntu desktop</title>
+<link rel="stylesheet" href="vendor/reveal.min.css">
+<link rel="stylesheet" href="vendor/white.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fbfaf6; --ink: #1c1e26; --muted: #5c6070;
+    --real: #0f766e; --leak: #b42318; --warn: #b45309; --blue: #2f5b8c;
+    --line: #d9d6cc; --code-bg: #f3f1ea;
+  }
+  .reveal-viewport { background: var(--bg); }
+  .reveal { font-family: 'Inter', -apple-system, sans-serif; color: var(--ink); }
+  .reveal h1, .reveal h2, .reveal h3 { font-family: 'Inter', sans-serif; color: var(--ink); text-transform: none; letter-spacing: -0.02em; font-weight: 800; }
+  .reveal h1 { font-size: 2.3em; line-height: 1.1; }
+  .reveal h2 { font-size: 1.5em; margin-bottom: 0.5em; }
+  .reveal h3 { font-size: 1.05em; font-weight: 600; color: var(--muted); }
+  .reveal p, .reveal li { font-size: 0.78em; line-height: 1.5; }
+  .reveal section { text-align: left; }
+  .reveal .center { text-align: center; }
+  .reveal code { font-family: 'JetBrains Mono', monospace; font-variant-ligatures: none; }
+  .reveal p code, .reveal li code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.9em; }
+  .real { color: var(--real); } .leak { color: var(--leak); } .warn { color: var(--warn); } .muted { color: var(--muted); }
+  .small { font-size: 0.6em; color: var(--muted); }
+  .q { font-size: 0.6em; font-weight: 600; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2em; }
+  .big { font-size: 1.5em; font-weight: 800; line-height: 1.15; letter-spacing: -0.02em; }
+  .reveal .slide-number { background: transparent; color: var(--muted); font-size: 13px; }
+  .reveal .progress { color: var(--real); } .reveal .controls { color: var(--real); }
+  #ref { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; font: 400 12px 'JetBrains Mono', monospace; color: var(--muted); z-index: 30; white-space: nowrap; }
+  #spk { position: fixed; left: 18px; bottom: 14px; font: 600 13px 'JetBrains Mono', monospace; color: var(--muted); z-index: 30; }
+
+  /* story art: optional images in assets/story/ (prompts: assets/story/README.md). A missing file removes its own slot. */
+  .reveal img.art { border: 0; box-shadow: none; background: none; margin: 0; mix-blend-mode: multiply; }
+  .reveal img.hero { display: block; margin: 0.2em auto 0; max-height: 380px; max-width: 100%; }
+  .reveal img.key { position: absolute; right: 0; top: 0; height: 300px; }
+  .ic img.art { height: 1.2em; vertical-align: middle; }
+  .micro img.art { height: 120px; vertical-align: middle; }
+  img.art + .i { display: none; }  /* art replaces the line icon */
+  :has(> img.art) { background: var(--bg); }  /* multiply needs a backdrop inside its own stacking context, or white shows */
+
+  .term { background: #1c1e26; color: #e8e6df; font-family: 'JetBrains Mono', monospace; font-variant-ligatures: none; font-size: 0.5em; border-radius: 8px; padding: 0.8em 1.1em; line-height: 1.5; white-space: pre-wrap; }
+  .term .g { color: #9fdc9c; } .term .k { color: #ff8a80; font-weight: 600; } .term .y { color: #ffd479; } .term .c { color: #8d92a3; }
+  .hl { background: #4a2a28; border-radius: 4px; padding: 0 0.3em; margin: 0 -0.3em; }
+  .face { width: 140px; height: 140px; border-radius: 50%; object-fit: cover; border: 3px solid var(--line); }
+  .initials { width: 140px; height: 140px; flex: none; border-radius: 50%; border: 3px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 1.1em; font-weight: 800; color: var(--muted); background: var(--code-bg); }
+  .li { display: grid; grid-template-columns: 1fr 1fr; row-gap: 0.5em; } .li > div { padding: 0 0.5em; } .li > div + div { border-left: 1px solid var(--line); } .reveal .li img.qr { width: 165px; height: 165px; }
+  .li .who { display: flex; align-items: center; justify-content: center; gap: 0.5em; margin: 0.3em 0 0; } .reveal .li .face { width: 64px; height: 64px; border-width: 2px; margin: 0; }
+  .reveal img.qr { width: 190px; height: 190px; margin: 0; border: 0; box-shadow: none; }
+
+  /* generic cards / chain */
+  .chain { display: flex; align-items: center; justify-content: space-between; position: relative; margin-top: 0.8em; }
+  .node { text-align: center; width: 190px; }
+  .node .ic { font-size: 2.6em; line-height: 1.1; }
+  .node b { display: block; font-size: 0.7em; }
+  .node .role { display: block; font-size: 0.5em; color: var(--muted); }
+  .lk { font-size: 1.6em; color: var(--muted); transition: color .4s; }
+  .lk.bad { color: var(--leak); }
+  .card { border: 2px solid var(--line); border-radius: 12px; background: #fff; padding: 0.5em 0.7em; text-align: center; }
+  .card .ic { font-size: 2.2em; }
+  .card b { display: block; font-size: 0.7em; }
+  .card span.s { display: block; font-size: 0.5em; color: var(--muted); margin-top: 0.2em; }
+  .reveal .fragment.st { opacity: 1; visibility: inherit; }  /* invisible state-switch fragments */
+
+  /* slide 3: CPU vs GPU grids */
+  .grids { display: grid; grid-template-columns: 1fr 1fr; gap: 1.6em; margin-top: 0.5em; }
+  .grids h3 { margin: 0 0 0.3em; }
+  .tiles { display: grid; grid-template-columns: repeat(14, 1fr); gap: 3px; }
+  .tiles i { aspect-ratio: 1; background: #eceae1; border-radius: 3px; }
+
+  /* slide 5: packets traveling over the chain */
+  .pk { position: absolute; top: 215px; font-size: 2.6em; opacity: 0; }
+  .pk .i { stroke-width: 0.6; }
+  .pk.slip { color: var(--warn); } .pk.plate { color: var(--real); }
+  .present .pk.slip { animation: slip 6s ease-in-out infinite; }
+  .present .pk.plate { animation: plate 6s ease-in-out infinite; }
+  @keyframes slip { 0% { left: 6%; opacity: 1; } 45% { left: 88%; opacity: 1; } 50%,100% { left: 88%; opacity: 0; } }
+  @keyframes plate { 0%,50% { left: 88%; opacity: 0; } 55% { left: 88%; opacity: 1; } 100% { left: 6%; opacity: 1; } }
+  .micro { opacity: 0; transition: opacity .5s; text-align: center; margin-top: 0.8em; }
+  .c3 .micro { opacity: 1; }
+
+  /* timeline, bouncer verdicts */
+  .tl { position: relative; margin-top: 1.4em; border-top: 4px solid var(--line); display: flex; justify-content: space-between; padding-top: 1em; }
+  .tl .m { width: 30%; text-align: center; position: relative; }
+  .tl .m::before { content: ''; position: absolute; top: -1.45em; left: 50%; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; background: var(--real); }
+  .tl .m.dash::before { background: #fff; border: 3px dashed var(--warn); }
+  .tl .m b { display: block; font-size: 0.8em; } .tl .m span { font-size: 0.55em; color: var(--muted); }
+  .verdict { font-size: 1.6em; opacity: 0; transition: opacity .4s; }
+  .g1 .v1, .g2 .v2, .g3 .v3 { opacity: 1; }
+  .gpus { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.2em; margin-top: 1em; text-align: center; }
+  .gpu { border: 2px solid var(--line); border-radius: 10px; padding: 0.5em; background: #fff; transition: all .4s; }
+  .g1 .gpu.a, .g2 .gpu.b { border-color: var(--real); background: #eaf7f4; }
+  .g3 .gpu.c { border-color: var(--leak); background: #fdeeec; }
+  .gpu .chip { font-size: 2em; } .gpu b { display: block; font-size: 0.65em; }
+
+  /* snap box */
+  .snap { display: flex; align-items: center; gap: 0.6em; margin-top: 1.6em; }
+  .snap .gpuic { text-align: center; font-size: 2.2em; } .snap .gpuic span { display: block; font-size: 0.3em; color: var(--muted); }
+  .beam { flex: 0 0 150px; height: 6px; background: var(--real); border-radius: 3px; position: relative; transition: all .5s; }
+  .beam::after { content: ''; position: absolute; right: -8px; top: -7px; border: 10px solid transparent; border-left: 14px solid var(--real); border-right: 0; }
+  .wall { width: 20px; height: 200px; background: repeating-linear-gradient(45deg, #b8b4a6, #b8b4a6 6px, #d9d6cc 6px, #d9d6cc 12px); border-radius: 4px; position: relative; transition: all .5s; }
+  .wall .x { position: absolute; top: -1.9em; left: 50%; font-size: 1.4em; transform: translateX(-50%); }
+  .boxed { min-width: 300px; border: 3px dashed var(--warn); border-radius: 14px; padding: 1.4em 1.4em 1em; text-align: center; position: relative; background: #fffaf0; }
+  .boxed .ic { font-size: 2.6em; } .boxed .lab { white-space: nowrap; position: absolute; top: -0.9em; left: 1em; background: var(--bg); padding: 0 0.5em; font-size: 0.55em; font-weight: 700; color: var(--warn); letter-spacing: .06em; text-transform: uppercase; }
+  .snap:not(.open) .beam { width: 60px; flex-basis: 60px; background: var(--leak); }
+  .snap:not(.open) .beam::after { display: none; }
+  .snap.open .wall { height: 70px; opacity: .35; }
+  .snap.open .x { display: none; }
+  .snap .okmark { display: none; font-size: 1.4em; } .snap.open .okmark { display: block; }
+
+  /* scoreboard */
+  .score { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em; margin-top: 0.8em; }
+  .score .card { min-height: 150px; }
+  .score .val { font-family: 'JetBrains Mono', monospace; font-size: 0.55em; opacity: 0; transition: opacity .4s; display: block; margin-top: .4em; }
+  .s1 .a, .s2 .b { opacity: 1; }
+  .s1 .card.r { border-color: var(--real); background: #eaf7f4; } .s2 .card.f { border-color: var(--warn); background: #fff6e8; }
+
+  /* five commands */
+  .cmds { margin-top: 0.4em; }
+  .cmd { display: grid; grid-template-columns: 56px 1.5fr 1fr; align-items: center; gap: 0.6em; padding: 0.35em 0; border-bottom: 1px solid var(--line); font-size: 0.62em; }
+  .cmd .n { width: 1.8em; height: 1.8em; border-radius: 50%; background: var(--ink); color: #fff; text-align: center; line-height: 1.8em; font-weight: 800; }
+  .cmd code { background: var(--code-bg); padding: 0.15em 0.5em; border-radius: 5px; }
+  .cmd .w { color: var(--real); font-weight: 600; }
+
+  /* spinning cubes */
+  .cubes { display: flex; justify-content: space-around; margin-top: 1.4em; text-align: center; }
+  .scene { width: 150px; height: 150px; perspective: 700px; margin: 0 auto 1.2em; }
+  .cube { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; animation: spin 5s linear infinite paused; }
+  .present .cube { animation-play-state: running; }
+  .cube.slow { animation: spin 7s steps(5) infinite paused; }
+  .present .cube.slow { animation-play-state: running; }
+  .cube div { position: absolute; width: 150px; height: 150px; border: 3px solid #fff; opacity: .92; background: var(--real); }
+  .cube.slow div { background: var(--warn); }
+  .cube .f1 { transform: translateZ(75px); } .cube .f2 { transform: rotateY(90deg) translateZ(75px); }
+  .cube .f3 { transform: rotateY(180deg) translateZ(75px); } .cube .f4 { transform: rotateY(-90deg) translateZ(75px); }
+  .cube .f5 { transform: rotateX(90deg) translateZ(75px); } .cube .f6 { transform: rotateX(-90deg) translateZ(75px); }
+  @keyframes spin { from { transform: rotateX(-22deg) rotateY(0); } to { transform: rotateX(-22deg) rotateY(360deg); } }
+  .badge { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 0.5em; padding: 0.25em 0.8em; border-radius: 999px; }
+  .badge.ok { background: #d1f0eb; color: var(--real); } .badge.fb { background: #fdebd2; color: var(--warn); }
+
+  /* roadmap: chips passing the door */
+  .door { display: flex; gap: 0.8em; margin-top: 1.2em; flex-wrap: wrap; }
+  .door .gpu { width: 150px; text-align: center; }
+  .present .door .gpu { animation: pass 0.6s backwards; animation-delay: calc(var(--i) * 0.9s); }
+  .door .gpu { border-color: var(--real); background: #eaf7f4; }
+  @keyframes pass { from { opacity: .1; transform: translateX(-30px); filter: grayscale(1); border-color: var(--line); background: #fff; } }
+  .present .door .gpu::after { content: ' ✓'; color: var(--real); font-weight: 800; animation: pass 0.6s backwards; animation-delay: calc(var(--i) * 0.9s + 0.3s); }
+
+  .stack5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.7em; margin-top: 0.8em; }
+  .final .cmd { grid-template-columns: 56px 1fr; font-size: 0.7em; }
+  video.demo { display: block; margin: 0.3em auto 0; max-width: 100%; max-height: 470px; border-radius: 8px; border: 1px solid var(--line); }
+
+  /* interactive deck */
+  .i { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.14em; }
+  .ic { color: var(--ink); } .gpuic, .gpu .chip { color: var(--real); } .ic.real { color: var(--real); } .ic.leak { color: var(--leak); } .ic.warn { color: var(--warn); }
+  .verdict .i, .okmark .i { stroke-width: 3; }
+  .wall .x { color: var(--leak); } .okmark { color: var(--real); }
+  .reveal.has-dark-background .slide-number, body:has(.reveal.has-dark-background) #spk { color: #b9e4de; }
+  .reveal .chapter h1 { color: #fff; font-size: 2.6em; } .reveal .chapter .q { color: #b9e4de; font-size: 0.8em; margin-bottom: 0.6em; }
+  .ask { display: inline-block; font-size: 0.5em; font-weight: 700; background: #fff3d6; color: var(--warn); border: 2px solid #f0d9a3; border-radius: 999px; padding: 0.15em 0.9em; margin-bottom: 0.5em; }
+  .go .t-cpu i { background: var(--ink); transition: background .2s; transition-delay: var(--d); }
+  .go .t-gpu i { background: var(--real); transition: background .3s; transition-delay: var(--d); }
+  .ba { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em; margin-top: 0.4em; }
+  .ba .side { border-radius: 14px; padding: 0.6em 1em; min-height: 330px; }
+  .ba .before { background: #fdeeec; border: 2px solid #f0c8c3; }
+  .ba .after { background: #eaf7f4; border: 2px solid #b9e0d9; }
+  .ba h3 { margin: 0 0 0.4em; font-size: 0.9em; color: var(--ink); }
+  .ba .before h3 { color: var(--leak); } .ba .after h3 { color: var(--real); }
+  .ba p { margin: 0.35em 0; font-size: 0.62em; }
+  .ba .before p { text-decoration-color: var(--leak); }
+  .q4 { grid-template-columns: repeat(4, 1fr); }
+  .q4 .card { min-height: 210px; }
+  .q4 .verdict { opacity: 1; display: block; font-size: 0.6em; font-weight: 700; margin-top: 0.5em; }
+  .row { display: grid; grid-template-columns: 1fr 40px 1fr; align-items: center; gap: 0.5em; padding: 0.45em 0; border-bottom: 1px solid var(--line); font-size: 0.62em; }
+  .row .b { color: var(--leak); } .row .a { color: var(--real); font-weight: 700; } .row .ar { text-align: center; color: var(--muted); }
+  video.demo { max-height: 440px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="i-laptop" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></symbol><symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></symbol><symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></symbol><symbol id="i-clip" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><rect x="9" y="2" width="6" height="4" rx="1"/><path d="M9 11h6M9 15h6"/></symbol><symbol id="i-chef" viewBox="0 0 24 24"><path d="M7 14a3.5 3.5 0 0 1 .5-6.900A4.500 4.500 0 0 1 16.500 7.100 3.500 3.500 0 0 1 17 14z"/><path d="M7 14v5h10v-5"/></symbol><symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/><rect x="9.500" y="9.500" width="5" height="5"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol><symbol id="i-receipt" viewBox="0 0 24 24"><path d="M6 2.500h12v19l-2-1.500-2 1.500-2-1.500-2 1.500-2-1.500-2 1.500z"/><path d="M9 7h6M9 10.500h6M9 14h3.500"/></symbol><symbol id="i-plate" viewBox="0 0 24 24"><ellipse cx="12" cy="16" rx="10.500" ry="4.500"/><ellipse cx="12" cy="15.500" rx="6" ry="2.500"/><path d="M12 5.500l3.200 1.700v3.600L12 12.500l-3.200-1.700V7.200zM8.800 7.200L12 9l3.200-1.800M12 9v3.500"/></symbol><symbol id="i-micro" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><rect x="6" y="9" width="9" height="6" rx="1"/><path d="M18 10h.01M18 14h.01"/></symbol><symbol id="i-hand" viewBox="0 0 24 24"><path d="M8 11V6a1.500 1.500 0 0 1 3 0v4M11 10V4.500a1.500 1.500 0 0 1 3 0V10M14 10V6a1.500 1.500 0 0 1 3 0v7c0 4-2.500 7-6 7-2.500 0-4-1-5-3l-2-4a1.500 1.500 0 0 1 2.500-1.500L8 14"/></symbol><symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.500l4.500 4.500L19 7.500"/></symbol><symbol id="i-cross" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol><symbol id="i-block" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.600 5.600l12.800 12.800"/></symbol><symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11M7.500 10.500L12 15l4.500-4.500M5 20h14"/></symbol><symbol id="i-pad" viewBox="0 0 24 24"><rect x="2.500" y="7" width="19" height="11" rx="5"/><path d="M8 10v5M5.500 12.500h5M16 11.500h.01M18 14h.01"/></symbol><symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M12 8V4M9 13h.01M15 13h.01M9.500 16h5"/></symbol><symbol id="i-sad" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01M8.500 16c1-1.500 2.200-2 3.500-2s2.500.5 3.500 2"/></symbol><symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01M8.500 14c1 1.500 2.200 2 3.500 2s2.500-.5 3.500-2"/></symbol></svg>
+
+<div id="spk"></div>
+<div id="ref"></div>
+<div class="reveal">
+<div class="slides">
+
+<!-- 1 TITLE -->
+<section data-spk="A + B">
+  <img class="art key" src="assets/story/title.png" alt="" onerror="this.remove()">
+  <h1>The cube that<br>wouldn't spin</h1>
+  <h3>Why WebGPU works (or doesn't)<br>on your Ubuntu desktop</h3>
+  <div style="display:flex;align-items:center;gap:2.5em;margin-top:1.3em">
+    <div style="display:flex;align-items:center;gap:1em"><img class="face" src="assets/speaker-aishwarya.png" alt="Aishwarya Mathuria"><p class="small" style="margin:0;line-height:1.3">Aishwarya Mathuria<br><span style="font-size:.7em;color:var(--muted)">Computer Scientist 2 | Adobe</span></p></div>
+    <div style="display:flex;align-items:center;gap:1em"><img class="face" src="assets/speaker.png" alt="Nishant Kumar Thakur"><p class="small" style="margin:0;line-height:1.3">Nishant Kumar Thakur<br><span style="font-size:.7em;color:var(--muted)">Senior Computer Scientist | Adobe</span></p></div>
+  </div>
+  <aside class="notes">[~1m] Intro both speakers. "We'll tell you a story: the day a 3D cube refused to spin on our Ubuntu desktop. By the end you'll know why WebGPU works, or doesn't, on your laptop."</aside>
+</section>
+
+<!-- 1b COLD OPEN -->
+<section data-spk="A" data-ref="Chrome docs · WebGPU troubleshooting tips: developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips">
+  <p class="q">it started like this</p>
+  <h2 style="font-size:1.15em;margin-bottom:.3em">We opened a spinning-cube demo. Nothing spun.</h2>
+  <div style="display:flex;align-items:center;justify-content:center;gap:1.2em;margin-top:.4em">
+    <img class="art" style="width:360px;flex:none" src="assets/story/cold-open.png" alt="A laptop showing an empty frame where a cube should be" onerror="this.remove()">
+    <video class="demo" style="width:740px;max-height:440px;margin:0" src="assets/chromium.mp4" data-autoplay muted playsinline preload="auto"></video>
+  </div>
+  <p class="center fragment"><b class="leak">"requestAdapter returned null"</b></p>
+  <aside class="notes">[~0.5m] Story, told the way it really happened to you: Ubuntu 26.04, a WebGPU sample page, and no cube. The clip is the real Chromium 156 snap on VM 1 (note the yellow banner: it was launched with --enable-unsafe-webgpu and still fails). Pause after "Nothing spun", then click for the error text: "requestAdapter returned null - this sample can't run on this system". "We assumed it would just work." Don't explain anything yet: the rest of the talk is us finding out why.</aside>
+</section>
+
+<!-- 2 HOOK -->
+<section data-spk="A">
+  <span class="ask"><svg class="i"><use href="#i-hand"/></svg> hands up when you spot yourself</span>
+  <h2>Same page. Three laptops. Which one is yours?</h2>
+  <div class="gpus">
+    <div class="card fragment"><div class="ic real"><svg class="i"><use href="#i-laptop"/></svg></div><b class="real">Works</b><span class="s">spinning 3D cube</span></div>
+    <div class="card fragment"><div class="ic leak"><svg class="i"><use href="#i-laptop"/></svg></div><b class="leak">"WebGPU not supported"</b><span class="s">fails loudly</span></div>
+    <div class="card fragment"><div class="ic warn"><svg class="i"><use href="#i-laptop"/></svg></div><b class="warn">Works... slowly</b><span class="s">fails quietly</span></div>
+  </div>
+  <p class="small fragment" style="margin-top:1.2em">You usually can't tell which one you are. Today you will.</p>
+  <aside class="notes">[~1.5m] Story: "Ours was laptop number two. But there are three ways this goes." Reveal one laptop per click and ask for a show of hands each time. The quiet one is the dangerous one, nobody notices. Aha: most of the room has never checked.</aside>
+</section>
+
+<!-- 3 RACE -->
+<section class="chapter" data-spk="A" data-background-color="#0f766e">
+  <p class="q">chapter 1</p>
+  <h1>What was that page<br>asking for?</h1>
+  <aside class="notes">[~5s] Chapter card. Say the line, pause, click.</aside>
+</section>
+
+<section data-spk="A">
+  <span class="ask"><svg class="i"><use href="#i-hand"/></svg> guess first: who wins?</span>
+  <h2>Same job: fill the grid. Who wins?</h2>
+  <div id="race">
+    <div class="grids">
+      <div><h3>CPU: a few clever workers</h3><div class="tiles t-cpu" data-tiles="cpu"></div></div>
+      <div><h3>GPU: thousands of tiny ones</h3><div class="tiles t-gpu" data-tiles="gpu"></div></div>
+    </div>
+  </div>
+  <span class="fragment st" data-on="#race" data-cls="go"></span>
+  <aside class="notes">[~1m] Story: before we could fix anything we had to understand what the page wanted: a GPU. Ask the room to vote CPU or GPU, then click. Aha: the GPU isn't smarter, it's wider. Same small job thousands of times at once: pixels, AI math.</aside>
+</section>
+
+<!-- 4 BEFORE/AFTER WEBGPU -->
+<section data-spk="A">
+  <h2>What is WebGPU?</h2>
+  <div class="ba">
+    <div class="side before"><h3>Before</h3>
+      <p class="fragment"><svg class="i"><use href="#i-globe"/></svg> A web page could only draw simple things</p>
+      <p class="fragment"><svg class="i"><use href="#i-down"/></svg> Heavy work (games, AI) meant installing an app</p>
+    </div>
+    <div class="side after"><h3>With WebGPU</h3>
+      <p class="fragment"><svg class="i"><use href="#i-chip"/></svg> A web page can use <b class="real">your GPU</b></p>
+      <p class="fragment"><svg class="i"><use href="#i-pad"/></svg> 3D graphics and <svg class="i"><use href="#i-bot"/></svg> AI in a browser tab</p>
+      <p class="fragment"><b>No install.</b></p>
+    </div>
+  </div>
+  <aside class="notes">[~1m] Aha: your browser tab can now do what used to need an app. WebGPU is the successor to WebGL. The catch (next slides): your tab only gets the GPU if everything in between works.</aside>
+</section>
+
+<!-- 5 THE STACK (+ what breaks) -->
+<section data-spk="A">
+  <h2>How a web page reaches the GPU</h2>
+  <p class="small" style="margin-top:-0.8em">Think of ordering at a restaurant. Somewhere on the way, our cube got lost.</p>
+  <div id="chain6"><div class="chain">
+    <div class="node"><div class="ic"><img class="art" src="assets/story/customer.png" alt="" onerror="this.remove()"><svg class="i"><use href="#i-globe"/></svg></div><b>Page</b><span class="role">the customer</span></div>
+    <span class="lk l1 fragment" data-fragment-index="1">→</span>
+    <div class="node fragment" data-fragment-index="1"><div class="ic"><img class="art" src="assets/story/waiter.png" alt="" onerror="this.remove()"><svg class="i"><use href="#i-compass"/></svg></div><b>Browser</b><span class="role">the waiter</span></div>
+    <span class="lk l2 fragment" data-fragment-index="2">→</span>
+    <div class="node fragment" data-fragment-index="2"><div class="ic"><img class="art" src="assets/story/order-desk.png" alt="" onerror="this.remove()"><svg class="i"><use href="#i-clip"/></svg></div><b>Vulkan driver</b><span class="role">the order system</span></div>
+    <span class="lk l3 fragment" data-fragment-index="3">→</span>
+    <div class="node fragment" data-fragment-index="3"><div class="ic"><img class="art" src="assets/story/chef.png" alt="" onerror="this.remove()"><svg class="i"><use href="#i-chef"/></svg></div><b>GPU</b><span class="role">the chef</span></div>
+    <div class="fragment" data-fragment-index="4" style="position:absolute;inset:0;pointer-events:none"><span class="pk slip"><svg class="i"><use href="#i-receipt"/></svg></span><span class="pk plate"><svg class="i"><use href="#i-plate"/></svg></span></div>
+  </div>
+  <div class="micro"><div style="font-size:3.4em;line-height:1"><img class="art" src="assets/story/microwave.png" alt="" onerror="this.remove()"><svg class="i"><use href="#i-micro"/></svg></div><b class="warn" style="display:block;font-size:.6em;margin-top:.3em">Break a link and some browsers let the CPU "microwave" cook it instead. Slowly. No error.</b></div>
+  </div>
+  <span class="fragment st" data-fragment-index="5" data-on="#chain6" data-cls="c1"></span>
+  <span class="fragment st" data-fragment-index="6" data-on="#chain6" data-cls="c2"></span>
+  <span class="fragment st" data-fragment-index="7" data-on="#chain6" data-cls="c3"></span>
+  <aside class="notes">[~3m] Clicks 1-3 build the chain, 4 sends an order through (it works). Then 5-7 crack each link in red; the last one brings in the CPU microwave. Be careful: not every browser does this. Chrome removed its software fallback (no default software fallback on Linux), so Chrome more often gives a null adapter, while Firefox on our VM exposed the CPU adapter. Story: "We ordered a spinning cube and no plate came back. So one of these links lost our order, and our job was to find which." A page never talks to the GPU directly. This chain is the whole talk: every link can break, either with an error or a slow fallback.</aside>
+</section>
+
+<!-- 7 BEFORE/AFTER DEBUG -->
+<section class="chapter" data-spk="A" data-background-color="#0f766e">
+  <p class="q">chapter 2</p>
+  <h1>The tempting way out</h1>
+  <aside class="notes">[~5s] Chapter card. Say the line, pause, click.</aside>
+</section>
+
+<section data-spk="A">
+  <h2>Guessing vs checking</h2>
+  <div class="ba">
+    <div class="side before"><h3><svg class="i"><use href="#i-sad"/></svg> Guessing</h3>
+      <p class="fragment">1. "WebGPU not supported"</p>
+      <p class="fragment">2. Google the error</p>
+      <p class="fragment">3. Paste a flag from an old forum post</p>
+      <p class="fragment">4. Reinstall. Reboot.</p>
+      <p class="fragment">5. Still broken. Blame the laptop.</p>
+    </div>
+    <div class="side after"><h3><svg class="i"><use href="#i-smile"/></svg> Checking</h3>
+      <p class="fragment">1. Ask the laptop five questions (60 seconds)</p>
+      <p class="fragment">2. Spot the one layer that's off</p>
+      <p class="fragment">3. Fix that one thing, not everything</p>
+    </div>
+  </div>
+  <aside class="notes">[~2m] Story: the fork in the road. A lost order, and two ways to go looking for it. Left side first, let people recognise themselves (laugh). Then the right side. Aha: debugging is checking layers, not luck.</aside>
+</section>
+
+<!-- 11 DEMO 1 INTRO -->
+<section class="chapter" data-spk="B" data-background-color="#0f766e">
+  <p class="q">chapter 3</p>
+  <h1>So we asked the laptop</h1>
+  <aside class="notes">[~5s] Chapter card. Say the line, pause, click.</aside>
+</section>
+
+<section data-spk="B">
+  <span class="ask"><svg class="i"><use href="#i-hand"/></svg> how many have you run before?</span>
+  <h2>Five questions to ask your laptop</h2>
+  <div class="cmds">
+    <div class="cmd fragment"><span class="n">1</span><code>lspci -k</code><span class="w">your GPU</span></div>
+    <div class="cmd fragment"><span class="n">2</span><code>vulkaninfo --summary</code><span class="w">your Vulkan driver</span></div>
+    <div class="cmd fragment"><span class="n">3</span><code>echo $XDG_SESSION_TYPE</code><span class="w">Wayland or X11</span></div>
+    <div class="cmd fragment"><span class="n">4</span><code>snap list | grep -i -E 'firefox|chromium'</code><span class="w">which browsers</span></div>
+    <div class="cmd fragment"><span class="n">5</span><code>firefox --version</code><span class="w">which build</span></div>
+  </div>
+  <p class="small fragment" style="margin-top:1em">Why it matters: browsers only switch WebGPU on for GPU and browser combinations they've tested.</p>
+  <aside class="notes">[~1.5m] Story: instead of guessing, we walked the chain and asked each link one question. Most people never check any of these five. On Ubuntu 26.04 there is no X11 session any more, so command 3 will say wayland on a stock install. One click each, then the last line (browsers only enable WebGPU for GPU + browser combos they have tested; Intel Gen12+ since Chrome 144, NVIDIA on Wayland since 147, others need a flag). Then play the next slide. Say the demo is Ubuntu 26.04 in a VM on an Apple GPU, same layers as real hardware.</aside>
+</section>
+
+<!-- 11b DEMO 1 VIDEO -->
+<section data-spk="B">
+  <p class="q">demo 1 · the laptop answers</p>
+  <video class="demo" style="max-height:580px" src="assets/demo1.mp4" data-autoplay muted controls playsinline preload="auto"></video>
+  <aside class="notes">[~4m] Pre-recorded, muted: you narrate. Point at: Virtio GPU, "Virtio-GPU Venus" vs "llvmpipe" (CPU), wayland, snap Firefox. Space = play/pause. "Five answers, and you can predict what the browser will do."</aside>
+</section>
+
+<!-- 10 TWO BROWSERS -->
+<section class="chapter" data-spk="A" data-background-color="#0f766e">
+  <p class="q">chapter 4 · the twist</p>
+  <h1>We opened a<br>second browser</h1>
+  <aside class="notes">[~5s] Chapter card. Say the line, pause, click.</aside>
+</section>
+
+<section data-spk="A" data-ref="Chrome docs · WebGPU troubleshooting tips: developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips">
+  <h2>Two browsers. Two answers.</h2>
+  <p class="small" style="margin-top:-0.8em">Same laptop. Same GPU. Both browsers are snaps.</p>
+  <div class="ba">
+    <div class="side after" style="min-height:260px;position:relative"><h3>Firefox</h3>
+      <p class="fragment" data-fragment-index="1"><svg class="i"><use href="#i-check"/></svg> WebGPU works</p>
+      <p class="fragment" data-fragment-index="1">The cube spins</p>
+      <div class="scene fragment" data-fragment-index="1" style="position:absolute;right:90px;top:75px;zoom:.7"><div class="cube"><div class="f1"></div><div class="f2"></div><div class="f3"></div><div class="f4"></div><div class="f5"></div><div class="f6"></div></div></div>
+    </div>
+    <div class="side before" style="min-height:260px;font-size:.9em"><h3>Chromium</h3>
+      <p class="fragment" data-fragment-index="2"><svg class="i"><use href="#i-cross"/></svg> "requestAdapter returned null"</p>
+      <p class="fragment" data-fragment-index="2">Chrome's guide lists a crashing graphics process as one cause. Ours crashes</p>
+      <p class="fragment" data-fragment-index="2">Google Chrome as a .deb fails the same way, so it's not the snap</p>
+      <p class="fragment" data-fragment-index="3">WebGPU uses Vulkan, but the rest of Chromium uses OpenGL. Best guess: that OpenGL ES 3.0 step fails here</p>
+    </div>
+  </div>
+  <p class="fragment real" data-fragment-index="4" style="margin-top:.8em"><b>Old habit: "my GPU is broken". New habit: "does a second browser work?"</b></p>
+  <aside class="notes">[~2m] Story: the twist. Clicks: 1 Firefox works, 2 Chromium error and the Chrome-guide cause (our log shows the graphics process exiting several times), 3 why OpenGL matters (Chrome blog: WebGPU on Linux uses Vulkan, the rest of Chromium stays on OpenGL) plus our best guess, 4 the habit line. The cube that wouldn't spin, spins: click 1 and let it turn for a second before you click again. VM 1 (Ubuntu 26.04 on UTM, Apple M5 Max via Venus). Firefox 158 snap: WebGPU works. Chromium 156 snap: fails, even with --enable-unsafe-webgpu --enable-features=Vulkan --use-angle=vulkan and with VK_ICD_FILENAMES forced. Facts we checked: both are snaps; Chromium has opengl connected and uses the mesa-2404 content snap (Mesa 25.2.8, ships virtio/Venus and lvp ICDs; host Mesa is 26.0.8); the snap's Mesa Venus works outside the snap via vulkaninfo; no AppArmor DENIED for chromium. Best-guess line on the slide is a hypothesis, not proven: plain `chromium` with no flags fails identically (only EGL ES 3.0 errors, GPU process restarts several times, no Vulkan lines), while eglinfo on the GBM platform shows ES 3.0 with both the system Mesa and the snap Mesa. Untested: the Wayland EGL platform, which is what Chromium would use. If asked: "that is our best guess, we have not proved it." Chrome's own docs: its Linux WebGPU uses Vulkan while the rest of Chromium stays on OpenGL, and its troubleshooting page lists a GPU process that crashes several times as a reason for a null adapter. Also checked: Google Chrome 157(?) installed as a .deb (system Mesa 26.0.8, no snap) fails the same way: ES 3.0 errors, GPU process exits, requestAdapter null, and the bundled Vulkan loader warns "Failed to open JSON file virtio_icd.json / lvp_icd.json ... Found no drivers". So the snap is NOT the cause. Untested idea: Chrome's GPU sandbox may be blocking access to driver files (try --disable-gpu-sandbox on a throwaway VM profile, diagnostic only). Also checked: chrome://settings/system has 'Use graphics acceleration when available' ON, so that common cause of a null adapter is ruled out. (Log lines for Q&A, not on the slide: "vkCreateInstance: Found no drivers!" and "eglCreateContext ES 3.0 failed"; the first is misleading, the driver exists.) Chromium logs eglCreateContext ES 3.0 failed (EGL_BAD_ATTRIBUTE) and its GPU process exits at init, before WebGPU. So do NOT say the snap blocks the GPU: unproven and Firefox is a snap too. Honest line: "we don't know exactly why; same machine, same GPU, different browser, different answer." Also ruled out: host Mesa 26.0.8 and the snap's Mesa 25.2.8 both give OpenGL ES 3.0 via virgl outside the snap (eglinfo, GBM platform), and the gpuweb wiki's full launch recipe with --ozone-platform=x11 still fails. Cause inside the Chromium snap is unknown, and that is fine: say so.</aside>
+</section>
+
+<!-- 12 DEMO 2 VIDEO -->
+<section class="chapter" data-spk="B" data-background-color="#0f766e">
+  <p class="q">chapter 5</p>
+  <h1>Loaded is not the<br>same as working</h1>
+  <aside class="notes">[~5s] Chapter card. Say the line, pause, click.</aside>
+</section>
+
+<section data-spk="B">
+  <p class="q">demo 2 · is it really the GPU?</p>
+  <video class="demo" style="max-height:520px" src="assets/demo2.mp4" data-autoplay muted controls playsinline preload="auto"></video>
+  <p class="small center" style="margin-top:.6em">Real GPU: <code>isFallbackAdapter: false</code> · CPU pretending: <code>true</code></p>
+  <aside class="notes">[~3.5m] Story: a spinning cube looks like the happy ending. It isn't yet: this is laptop number three from the start, the quiet one. Pre-recorded, muted, one clip in two parts. Part A (VM 1, Firefox): webgpureport.org lists two adapters, #1 high-performance isFallbackAdapter false and #2 fallback true (the llvmpipe from demo 1), then the cube spins smoothly. Part B (VM 2, CPU only): vulkaninfo shows only llvmpipe, htop, webgpureport.org isFallbackAdapter true, then the cube. In part B the cube visibly stutters on the CPU-only VM (recorded as is). Say what you see: it still runs, just slower and burning the CPU. The slow/CPU case is the silent failure: the page works, so nobody notices.</aside>
+</section>
+
+<!-- 11b EPILOGUE -->
+<section data-spk="A">
+  <p class="q">epilogue</p>
+  <h2>Back to the cube that wouldn't spin</h2>
+  <img class="art hero" src="assets/story/epilogue.png" alt="The same laptop, now showing a spinning cube" onerror="this.remove()">
+  <p class="big center" style="margin-top:.3em">In Firefox, it spins. <span class="muted">Chromium is still an open case.</span></p>
+  <p class="center real fragment"><b>Stop guessing. Start checking.</b></p>
+  <aside class="notes">[~0.5m] Close the loop from the cold open: same laptop, same page. Be honest that the story has a loose end: we still don't know why Chromium fails, and that is fine. What changed is us: we know which links we checked and which one is left. Click for the moral, then move to the last slide.</aside>
+</section>
+
+<!-- 12 TAKE HOME -->
+<section class="final" data-spk="A + B">
+  <h2>Old you → new you</h2>
+  <div style="display:grid;grid-template-columns:1.8fr 1fr;gap:1.5em;align-items:center">
+    <div>
+      <div class="row fragment"><span class="b">"My laptop is slow."</span><span class="ar">→</span><span class="a">Which layer? Run the 5 commands.</span></div>
+      <div class="row fragment"><span class="b">Paste random flags</span><span class="ar">→</span><span class="a">Find the layer that's off first.</span></div>
+      <div class="row fragment"><span class="b">"It loads, so it works."</span><span class="ar">→</span><span class="a">Check <code>isFallbackAdapter</code>.</span></div>
+      <div class="row fragment"><span class="b">"This browser fails, so my GPU is broken."</span><span class="ar">→</span><span class="a">Try a second browser first.</span></div>
+    </div>
+    <div class="li">
+      <div class="center"><img class="qr" src="assets/qr-aishwarya.png" alt="LinkedIn QR: Aishwarya"><p class="small who"><img class="face" src="assets/speaker-aishwarya.png" alt="Aishwarya"></p></div>
+      <div class="center"><img class="qr" src="assets/qr-nishant.png" alt="LinkedIn QR: Nishant"><p class="small who"><img class="face" src="assets/speaker.png" alt="Nishant"></p></div>
+      <p class="small" style="grid-column:1/-1;margin:0;text-align:center">Find us on LinkedIn</p>
+    </div>
+  </div>
+  <aside class="notes">[~1m] Story: callback to the three laptops from the start. "Now you can tell which one is yours." One click per row. Leave this on screen for Q&A: both LinkedIn QR codes are here. Add the repo or script link before the talk.</aside>
+</section>
+
+</div>
+</div>
+<script src="vendor/reveal.min.js"></script>
+<script>
+  Reveal.initialize({ hash: true, fragmentInURL: false, slideNumber: 'c/t', transition: 'fade', width: 1280, height: 720, margin: 0.06 });
+
+  // CPU/GPU tiles: CPU fills one by one (slow), GPU all at once
+  document.querySelectorAll('[data-tiles]').forEach(g => {
+    for (let i = 0; i < 70; i++) {
+      const t = document.createElement('i');
+      t.style.setProperty('--d', (g.dataset.tiles === 'cpu' ? i * 70 : Math.random() * 300) + 'ms');
+      g.appendChild(t);
+    }
+  });
+
+  // invisible "state" fragments: add/remove a class on a target as clicks advance
+  const st = (e, add) => { const f = e.fragment, t = f.dataset.on && document.querySelector(f.dataset.on); if (t) t.classList.toggle(f.dataset.cls, add); };
+  Reveal.on('fragmentshown', e => st(e, true));
+  Reveal.on('fragmenthidden', e => st(e, false));
+
+  // slide 6: link crack colours follow c1..c3
+  const style = document.createElement('style');
+  style.textContent = '.c1 .pk{display:none}.c1 .l1,.c2 .l1,.c3 .l1,.c2 .l2,.c3 .l2,.c3 .l3{color:var(--leak)}';
+  document.head.appendChild(style);
+
+  // speaker marker (A = concepts, B = live demo)
+  const spk = document.getElementById('spk');
+  const mark = s => spk.textContent = s ? 'Speaker: ' + s : '';
+  const refEl = document.getElementById('ref');
+  const markRef = e => refEl.textContent = e.currentSlide.dataset.ref || '';
+  Reveal.on('ready', e => { mark(e.currentSlide.dataset.spk); markRef(e); });
+  Reveal.on('slidechanged', e => { mark(e.currentSlide.dataset.spk); markRef(e); });
+</script>
+</body>
+</html>
