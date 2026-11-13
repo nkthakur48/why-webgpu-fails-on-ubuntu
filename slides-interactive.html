@@ -443,7 +443,7 @@
 
   // speaker marker (A = concepts, B = live demo)
   const spk = document.getElementById('spk');
-  const mark = s => spk.textContent = s ? 'Speaker: ' + s : '';
+  const mark = s => spk.textContent = s || '';
   const refEl = document.getElementById('ref');
   const markRef = e => refEl.textContent = e.currentSlide.dataset.ref || '';
   Reveal.on('ready', e => { mark(e.currentSlide.dataset.spk); markRef(e); });
